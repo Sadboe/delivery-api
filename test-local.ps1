@@ -1,9 +1,15 @@
+$baseUrl = "http://localhost:3000/delivery"
+
 $tests = @(
-  @{ address = "Москва, Тверская 1"; expected = "out_of_zone" },
-  @{ address = "Ижевск, Советская, 2, 1, 3, 8"; expected = "ok" }
+  @{ address = "Ижевск, Советская, 2, 1, 3, 8"; title = "Ижевск, Советская 2" },
+  @{ address = "Ягул, Солнечная, 4"; title = "Ягул, Солнечная 4" },
+  @{ address = "Удмуртская Республика, Завьяловский район, Ягул, Солнечная, 4"; title = "Ягул полный адрес" },
+  @{ address = "Удмуртская Республика, Завьяловский район, Первомайский, Полевая, 10Б"; title = "Первомайский, Полевая 10Б" },
+  @{ address = "Москва, Тверская 1"; title = "Москва вне зоны" }
 )
 
 foreach ($test in $tests) {
+  Write-Host "`n=== $($test.title) ===" -ForegroundColor Cyan
   $json = (@{
     user_id = "test"
     address = $test.address
@@ -12,19 +18,12 @@ foreach ($test in $tests) {
 
   $body = [System.Text.Encoding]::UTF8.GetBytes($json)
 
-  Write-Host "Testing: $($test.address)"
-
   try {
     Invoke-RestMethod -Method Post `
-      -Uri "http://localhost:3000/delivery" `
+      -Uri $baseUrl `
       -ContentType "application/json; charset=utf-8" `
-      -Body $body
+      -Body $body | Format-List
   } catch {
-    Write-Host $_.Exception.Message
-    if ($_.ErrorDetails.Message) {
-      Write-Host $_.ErrorDetails.Message
-    }
+    Write-Host $_.Exception.Message -ForegroundColor Red
   }
-
-  Write-Host ""
 }
