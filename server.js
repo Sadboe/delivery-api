@@ -28,29 +28,49 @@ function normalizeText(value) {
     .trim();
 }
 
-function hasExplicitLocationContext(address) {
-  const lower = normalizeText(address).toLowerCase();
-  return [
-    "россия",
-    "удмурт",
-    "завьялов",
-    "ижевск",
-    "ягул",
-    "первомайский",
-    "хохряки",
-    "италмас",
-    "пирогово",
-    "октябрьский",
-    "завьялово"
-  ].some((word) => lower.includes(word));
+const UDMURTIA_LOCALITIES = [
+  "ягул",
+  "первомайский",
+  "хохряки",
+  "италмас",
+  "пирогово",
+  "октябрьский",
+  "завьялово",
+  "чемошур",
+  "средний",
+  "люкшудья",
+  "шабердино",
+];
+
+function hasWord(text, word) {
+  return new RegExp(`(^|[^а-яa-z])${word}([^а-яa-z]|$)`, "i").test(text);
 }
 
-function cutAddressAfterHouse(rawAddress) {
-  const address = normalizeText(rawAddress)
+function hasUdmurtiaContext(address) {
+  const lower = normalizeText(address).toLowerCase();
+  return lower.includes("удмурт") || lower.includes("завьялов") || lower.includes("ижевск");
+}
+
+function hasKnownUdmurtiaLocality(address) {
+  const lower = normalizeText(address).toLowerCase();
+  return UDMURTIA_LOCALITIES.some((locality) => hasWord(lower, locality));
+}
+
+function cleanAddressMarkers(value) {
+  return normalizeText(value)
     .replace(/№\s*/gi, "")
     .replace(/No\s*:?\s*/gi, "")
     .replace(/N\s*:?\s*/gi, "");
+}
 
+function isHouseToken(value) {
+  const token = normalizeText(value).replace(/\s+/g, "");
+  // Дом: 10, 10Б, 10/1, 122А и т.п.
+  return /^\d+[а-яa-z]?(?:\/\d+[а-яa-z]?)?$/i.test(token);
+}
+
+function cutAddressAfterHouse(rawAddress) {
+  const address = cleanAddressMarkers(rawAddress);
   if (!address) return "";
 
   const parts = address
@@ -58,25 +78,30 @@ function cutAddressAfterHouse(rawAddress) {
     .map((part) => normalizeText(part))
     .filter(Boolean);
 
-  if (parts.length <= 1) return address;
-
-  // Дом: 10, 10Б, 10 Б, 10/1, 122А и т.п.
-  const housePattern = /^\d+\s*[а-яa-z]?(?:\/\d+\s*[а-яa-z]?)?$/i;
-
-  let houseIndex = -1;
-  for (let i = 0; i < parts.length; i++) {
-    const cleanPart = parts[i].replace(/\s+/g, "");
-    if (housePattern.test(cleanPart)) {
-      houseIndex = i;
-      break;
+  // Если адрес введён с запятыми, отрезаем подъезд/этаж/квартиру после дома.
+  if (parts.length > 1) {
+    let houseIndex = -1;
+    for (let i = 0; i < parts.length; i++) {
+      if (isHouseToken(parts[i])) {
+        houseIndex = i;
+        break;
+      }
     }
+
+    return houseIndex >= 0
+      ? parts.slice(0, houseIndex + 1).join(", ")
+      : parts.join(", ");
   }
 
-  // Оставляем всё до номера дома включительно.
-  // После дома обычно идут подъезд, этаж, квартира/офис.
-  return houseIndex >= 0
-    ? parts.slice(0, houseIndex + 1).join(", ")
-    : parts.join(", ");
+  // Если запятых нет: "Первомайский Полевая 10Б 9".
+  // Берём текст до первого похожего номера дома включительно, чтобы убрать квартиру/этаж.
+  const tokens = address.split(" ").map((part) => normalizeText(part)).filter(Boolean);
+  const houseIndex = tokens.findIndex(isHouseToken);
+  if (houseIndex >= 1) {
+    return tokens.slice(0, houseIndex + 1).join(" ");
+  }
+
+  return address;
 }
 
 function makeGeocodeCandidates(rawAddress) {
@@ -89,13 +114,20 @@ function makeGeocodeCandidates(rawAddress) {
     if (normalized && !candidates.includes(normalized)) candidates.push(normalized);
   };
 
-  if (hasExplicitLocationContext(prepared)) {
+  if (hasUdmurtiaContext(prepared)) {
+    // Если регион/Ижевск уже указан, не добавляем лишние города, но оставляем исходный адрес.
+    add(prepared);
+  } else if (hasKnownUdmurtiaLocality(prepared)) {
+    // Если указан пригород/населённый пункт вроде Первомайский или Ягул,
+    // сначала принудительно ищем его в Удмуртии, чтобы Яндекс не уводил в Украину/другой регион.
+    add(`Удмуртская Республика, Завьяловский район, ${prepared}`);
+    add(`Удмуртская Республика, ${prepared}`);
     add(prepared);
   } else {
     // Если город не указан, сначала считаем, что это Ижевск.
     add(`Ижевск, ${prepared}`);
 
-    // Если в Ижевске не попало в зону/не нашлось — пробуем шире по Удмуртии.
+    // Затем ищем шире по Удмуртии.
     add(`Удмуртская Республика, ${prepared}`);
 
     // Последний резерв — как ввёл пользователь.
